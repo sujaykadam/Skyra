@@ -154,21 +154,41 @@ class InternVL3Model(ViFBench):
         (ViFBench requirement) Load the InternVL3 model and tokenizer.
         """
 
-        # 1. Compute device_map
-        # (Note: 'InternVL3-8B' is hard-coded in the official script; we use self.model_name instead)
-        device_map = split_model(self.model_path, self.model_name)
+        if torch.cuda.is_available():
+            # 1. Compute device_map
+            # (Note: 'InternVL3-8B' is hard-coded in the official script; we use self.model_name instead)
+            device_map = split_model(self.model_path, self.model_name)
 
-        # 2. Load the model
-        # (Note: load_in_8bit=False is from the official example; adjust based on your hardware)
-        self.model = AutoModel.from_pretrained(
-            self.model_path,
-            torch_dtype=torch.bfloat16,
-            load_in_8bit=False,
-            low_cpu_mem_usage=True,
-            use_flash_attn=True,
-            trust_remote_code=True,
-            device_map=device_map
-        ).eval()
+            # 2. Load the model
+            # (Note: load_in_8bit=False is from the official example; adjust based on your hardware)
+            self.model = AutoModel.from_pretrained(
+                self.model_path,
+                torch_dtype=torch.bfloat16,
+                load_in_8bit=False,
+                low_cpu_mem_usage=True,
+                use_flash_attn=True,
+                trust_remote_code=True,
+                device_map=device_map
+            ).eval()
+        else:
+            # Fallback for machines without CUDA:
+            # flash attention and the multi-GPU device_map are unavailable, so disable them and move the model manually.
+            self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+            self.model = AutoModel.from_pretrained(
+                self.model_path,
+                torch_dtype=torch.bfloat16,
+                load_in_8bit=False,
+                low_cpu_mem_usage=True,
+                use_flash_attn=False,
+                trust_remote_code=True
+            ).eval().to(self.device)
+
+            # Without flash attention the remote code falls back to eager attention, which materializes the full
+            # attention matrix for every head (tens of GiB for 16 frames). Switch the language model to sdpa instead.
+            from transformers.models.qwen2.modeling_qwen2 import Qwen2SdpaAttention
+            self.model.language_model.config._attn_implementation = "sdpa"
+            for layer in self.model.language_model.model.layers:
+                layer.self_attn.__class__ = Qwen2SdpaAttention
 
         # 3. Load the tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -234,7 +254,11 @@ class InternVL3Model(ViFBench):
 
         # 4. Move to device
         # (Official example uses .cuda(); this is standard in multi-GPU device_map mode)
-        pixel_values = pixel_values.to(torch.bfloat16).cuda()
+        if torch.cuda.is_available():
+            pixel_values = pixel_values.to(torch.bfloat16).cuda()
+        else:
+            # Non-CUDA fallback: use the device chosen in load_model
+            pixel_values = pixel_values.to(torch.bfloat16).to(self.device)
 
         # 5. Prepare the final prompt
         # The ViFBench base class provides SYSTEM_PROMPT; we need to combine it with user_prompt

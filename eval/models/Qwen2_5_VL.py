@@ -14,12 +14,22 @@ class Qwen2Model(ViFBench):
         """
         (Qwen2.5VL.py requirement) Load the Qwen2.5-VL model and Processor.
         """
-        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            self.model_path,
-            torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",
-            device_map="auto",
-        )
+        if torch.cuda.is_available():
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                self.model_path,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
+                device_map="auto",
+            )
+        else:
+            # Fallback for machines without CUDA (e.g. Apple silicon):
+            # flash_attention_2 and device_map="auto" are unavailable, so use sdpa and move the model manually.
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                self.model_path,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="sdpa",
+            ).to(device)
 
         self.processor = AutoProcessor.from_pretrained(self.model_path)
         self.device = self.model.device

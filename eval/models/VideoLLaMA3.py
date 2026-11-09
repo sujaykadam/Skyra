@@ -18,13 +18,24 @@ class VideoLLaMA3Model(ViFBench):
         print(f"Loading model {self.model_name} from {self.model_path}...")
 
         # (Based on example_videollama3.py)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_path,
-            trust_remote_code=True,
-            device_map="auto",
-            torch_dtype=torch.bfloat16,
-            attn_implementation="flash_attention_2",
-        )
+        if torch.cuda.is_available():
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_path,
+                trust_remote_code=True,
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
+            )
+        else:
+            # Fallback for machines without CUDA (e.g. Apple silicon):
+            # flash_attention_2 and device_map="auto" are unavailable, so use sdpa and move the model manually.
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_path,
+                trust_remote_code=True,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="sdpa",
+            ).to(device)
         self.processor = AutoProcessor.from_pretrained(
             self.model_path,
             trust_remote_code=True
